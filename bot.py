@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import json
+import random
 from typing import Optional, Dict, List, Tuple
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import aiohttp
@@ -29,19 +30,42 @@ class ReviewCheckkBot:
         self.processing_queue = asyncio.Queue()
         self.is_processing = False
         
-        # Enhanced headers for better scraping
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+        
+        self.platform_headers = {
+            'meesho': {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'max-age=0',
+                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1'
+            },
+            'amazon': {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            },
+            'flipkart': {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'X-User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+            }
         }
         
         # Platform patterns
@@ -76,20 +100,51 @@ class ReviewCheckkBot:
         ]
 
     async def init_session(self):
-        """Initialize aiohttp session"""
+        """Initialize aiohttp session with enhanced settings"""
         if not self.session:
-            timeout = aiohttp.ClientTimeout(total=20)
-            connector = aiohttp.TCPConnector(limit=100, limit_per_host=10)
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            connector = aiohttp.TCPConnector(
+                limit=50, 
+                limit_per_host=5,
+                enable_cleanup_closed=True,
+                keepalive_timeout=30
+            )
+            
+            jar = aiohttp.CookieJar(unsafe=True)
+            
             self.session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=connector,
-                headers=self.headers
+                cookie_jar=jar,
+                trust_env=True
             )
 
     async def close_session(self):
         """Close aiohttp session"""
         if self.session:
             await self.session.close()
+
+    def get_random_headers(self, platform: str = None) -> Dict:
+        """Get randomized headers for requests"""
+        base_headers = {
+            'User-Agent': random.choice(self.user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
+        # Add platform-specific headers
+        if platform and platform in self.platform_headers:
+            base_headers.update(self.platform_headers[platform])
+        
+        # Add random realistic headers
+        if random.choice([True, False]):
+            base_headers['Cache-Control'] = random.choice(['max-age=0', 'no-cache'])
+        
+        return base_headers
 
     def detect_platform(self, url: str) -> Optional[str]:
         """Detect platform from URL"""
@@ -104,18 +159,46 @@ class ReviewCheckkBot:
         domain = urlparse(url).netloc.lower()
         return any(shortener in domain for shortener in self.shorteners)
 
-    async def unshorten_url(self, url: str) -> str:
-        """Unshorten URL and remove affiliate parameters"""
+    async def unshorten_url(self, url: str, max_redirects: int = 10) -> str:
+        """Unshorten URL with enhanced redirect handling"""
         try:
             if not self.is_shortener(url):
                 return self.clean_affiliate_params(url)
             
             await self.init_session()
             
-            # Follow redirects to get final URL
-            async with self.session.get(url, allow_redirects=True) as response:
-                final_url = str(response.url)
-                return self.clean_affiliate_params(final_url)
+            current_url = url
+            redirect_count = 0
+            
+            while redirect_count < max_redirects:
+                try:
+                    headers = self.get_random_headers()
+                    
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                    
+                    async with self.session.get(
+                        current_url, 
+                        headers=headers,
+                        allow_redirects=False,
+                        timeout=aiohttp.ClientTimeout(total=15)
+                    ) as response:
+                        
+                        if response.status in [301, 302, 303, 307, 308]:
+                            location = response.headers.get('Location')
+                            if location:
+                                current_url = location
+                                redirect_count += 1
+                                continue
+                        
+                        # Final URL found
+                        final_url = str(response.url) if hasattr(response, 'url') else current_url
+                        return self.clean_affiliate_params(final_url)
+                        
+                except Exception as e:
+                    logger.warning(f"Redirect attempt {redirect_count} failed for {current_url}: {e}")
+                    break
+            
+            return self.clean_affiliate_params(current_url)
                 
         except Exception as e:
             logger.error(f"Error unshortening URL {url}: {e}")
@@ -149,35 +232,65 @@ class ReviewCheckkBot:
         
         return clean_url
 
+    async def scrape_with_retry(self, url: str, platform: str, max_retries: int = 3) -> str:
+        """Enhanced scraping with multiple retry strategies"""
+        await self.init_session()
+        
+        for attempt in range(max_retries):
+            try:
+                headers = self.get_random_headers(platform)
+                
+                # Strategy variations per attempt
+                if attempt == 1:
+                    # Try with different user agent
+                    headers['User-Agent'] = random.choice(self.user_agents)
+                elif attempt == 2:
+                    # Try with minimal headers
+                    headers = {
+                        'User-Agent': random.choice(self.user_agents),
+                        'Accept': '*/*'
+                    }
+                
+                if attempt > 0:
+                    delay = random.uniform(2, 5) * attempt
+                    await asyncio.sleep(delay)
+                
+                async with self.session.get(
+                    url, 
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=25)
+                ) as response:
+                    
+                    if response.status == 200:
+                        return await response.text()
+                    elif response.status == 403:
+                        logger.warning(f"403 error on attempt {attempt + 1} for {url}")
+                        continue
+                    elif response.status == 429:
+                        # Rate limited - wait longer
+                        await asyncio.sleep(random.uniform(5, 10))
+                        continue
+                    else:
+                        logger.warning(f"HTTP {response.status} on attempt {attempt + 1} for {url}")
+                        continue
+                        
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout on attempt {attempt + 1} for {url}")
+                continue
+            except Exception as e:
+                logger.warning(f"Error on attempt {attempt + 1} for {url}: {e}")
+                continue
+        
+        raise Exception(f"Failed to scrape after {max_retries} attempts")
+
     async def scrape_product_details(self, url: str) -> Dict:
-        """Scrape product details from URL"""
+        """Scrape product details with enhanced error handling"""
         try:
-            await self.init_session()
-            
             platform = self.detect_platform(url)
             if not platform:
                 return {'error': 'Unsupported platform'}
             
-            # Platform-specific headers
-            headers = self.headers.copy()
-            if platform == 'amazon':
-                headers['Accept-Language'] = 'en-US,en;q=0.9'
-            elif platform == 'flipkart':
-                headers['X-User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
-            
-            async with self.session.get(url, headers=headers) as response:
-                if response.status == 403:
-                    # Retry with different headers
-                    headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                    async with self.session.get(url, headers=headers) as retry_response:
-                        if retry_response.status != 200:
-                            return {'error': f'HTTP {retry_response.status}'}
-                        html = await retry_response.text()
-                elif response.status != 200:
-                    return {'error': f'HTTP {response.status}'}
-                else:
-                    html = await response.text()
-            
+            html = await self.scrape_with_retry(url, platform)
             soup = BeautifulSoup(html, 'html.parser')
             
             # Extract details based on platform
@@ -198,58 +311,62 @@ class ReviewCheckkBot:
                 
         except Exception as e:
             logger.error(f"Error scraping {url}: {e}")
-            return {'error': str(e)}
+            return {'error': 'Unable to extract product info'}
 
     async def scrape_meesho(self, soup: BeautifulSoup, url: str) -> Dict:
-        """Scrape Meesho product details"""
+        """Scrape Meesho product details with enhanced selectors"""
         details = {'platform': 'meesho', 'url': url}
         
-        # Title extraction
         title_selectors = [
             'h1[data-testid="product-title"]',
             'h1.sc-eDvSVe',
-            'h1',
+            'h1[class*="title"]',
             '[data-testid="product-title"]',
-            '.product-title'
+            '.product-title',
+            'h1',
+            '.sc-gKsewC',
+            '[class*="ProductTitle"]'
         ]
         
         for selector in title_selectors:
             title_elem = soup.select_one(selector)
-            if title_elem:
+            if title_elem and title_elem.get_text(strip=True):
                 details['title'] = title_elem.get_text(strip=True)
                 break
         
-        # Price extraction
         price_selectors = [
             '[data-testid="product-price"]',
             '.sc-fubCfw',
             '.price',
-            '[class*="price"]'
+            '[class*="price"]',
+            '[class*="Price"]',
+            '.sc-gKsewC span',
+            'span[class*="rupee"]'
         ]
         
         for selector in price_selectors:
             price_elem = soup.select_one(selector)
             if price_elem:
                 price_text = price_elem.get_text(strip=True)
-                price_match = re.search(r'₹?(\d+)', price_text)
+                price_match = re.search(r'₹?(\d+)', price_text.replace(',', ''))
                 if price_match:
                     details['price'] = price_match.group(1)
                     break
         
-        # Size extraction
-        size_elements = soup.select('[data-testid="size-option"], .size-option, [class*="size"]')
+        size_elements = soup.select('[data-testid="size-option"], .size-option, [class*="size"], [class*="Size"]')
         if size_elements:
             sizes = []
             for elem in size_elements:
                 size_text = elem.get_text(strip=True)
-                if size_text and len(size_text) <= 5:  # Valid size
+                if size_text and len(size_text) <= 5 and size_text.replace('.', '').replace('-', '').isalnum():
                     sizes.append(size_text)
             
             if sizes:
-                if len(sizes) >= 5:  # Many sizes available
+                unique_sizes = list(dict.fromkeys(sizes))  # Remove duplicates
+                if len(unique_sizes) >= 5:
                     details['sizes'] = 'All'
                 else:
-                    details['sizes'] = ', '.join(sizes[:4])  # Limit to 4 sizes
+                    details['sizes'] = ', '.join(unique_sizes[:4])
         
         return details
 
@@ -631,8 +748,10 @@ class ReviewCheckkBot:
             self.is_processing = False
 
     async def process_single_url(self, message, url: str, pin: str):
-        """Process a single URL"""
+        """Process a single URL with enhanced error handling"""
         try:
+            await asyncio.sleep(random.uniform(0.5, 1.0))
+            
             # Unshorten URL
             clean_url = await self.unshorten_url(url)
             
