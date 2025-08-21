@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Bot configuration
-BOT_TOKEN = "8327175937:AAGpC7M85iY-kbMVAcKJTrhXzKokWLGctCo"
+BOT_TOKEN = "8465346144:AAG9x6C3OCOpUhVz3-qEK1wBlACOdb0Bz_s"
 BOT_USERNAME = "@Easy_uknowbot"
 
 class ReviewCheckkBot:
