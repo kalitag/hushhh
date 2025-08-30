@@ -1,154 +1,78 @@
-import asyncio
-import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+import cv2
+import pytesseract
 import re
-import json
-import random
-from typing import Optional, Dict, List, Tuple
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-import aiohttp
-from bs4 import BeautifulSoup
-from telegram import Update, InputMediaPhoto
-from telegram.ext import Application, MessageHandler, CommandHandler, ContextTypes, filters
-import os
-from datetime import datetime
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+BOT_TOKEN = "8414049375:AAFMPUvB2u5KffNPsaAi3xu_DOiy-7dhHIg"
 
-# Bot configuration
-BOT_TOKEN = "8465346144:AAG9x6C3OCOpUhVz3-qEK1wBlACOdb0Bz_s"
-BOT_USERNAME = "@Easy_uknowbot"
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
 
-class ReviewCheckkBot:
-    def __init__(self):
-        self.session = None
-        self.advanced_mode = False
-        self.processing_queue = asyncio.Queue()
-        self.is_processing = False
-        
-        self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0'
-        ]
-        
-        self.platform_headers = {
-            'meesho': {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'max-age=0',
-                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Upgrade-Insecure-Requests': '1',
-                'Referer': 'https://www.google.com/'
-            },
-            'amazon': {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
-                'Referer': 'https://www.amazon.in/',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate'
-            },
-            'flipkart': {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'X-User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-                'Referer': 'https://www.flipkart.com/'
-            }
-        }
-        
-        self.platform_patterns = {
-            'amazon': [r'amazon\.in', r'amzn\.to', r'amazon\.com'],
-            'flipkart': [r'flipkart\.com', r'fkrt\.cc'],
-            'meesho': [r'meesho\.com'],
-            'myntra': [r'myntra\.com'],
-            'ajio': [r'ajio\.com'],
-            'snapdeal': [r'snapdeal\.com']
-        }
-        
-        self.shorteners = [
-            'spoo.me', 'wishlink.com', 'cutt.ly', 'fkrt.cc', 
-            'bitli.in', 'amzn.to', 'da.gd', 'bit.ly', 't.co'
-        ]
-        
-        self.clothing_keywords = [
-            'shirt', 'tshirt', 't-shirt', 'dress', 'kurti', 'saree', 'jeans', 
-            'trouser', 'pant', 'shorts', 'skirt', 'top', 'blouse', 'jacket',
-            'sweater', 'hoodie', 'suit', 'blazer', 'coat', 'leggings',
-            'nightwear', 'innerwear', 'bra', 'panty', 'brief', 'boxer'
-        ]
-        
-        self.fluff_words = [
-            'best', 'offer', 'deal', 'sale', 'new', 'latest', 'trending',
-            'stylish', 'fashionable', 'premium', 'luxury', 'exclusive',
-            'special', 'limited', 'hot', 'super', 'mega', 'great', 'amazing'
-        ]
+    if message.text and "http" in message.text:
+        url = message.text.strip()
+        screenshot_path = capture_mobile_screenshot(url)
+        title, price = extract_title_and_price(screenshot_path)
+        caption = f"{title} @{price}rs"
+        await message.reply_photo(photo=open(screenshot_path, 'rb'), caption=caption)
 
-    async def init_session(self):
-        """Initialize aiohttp session with enhanced settings"""
-        if not self.session:
-            timeout = aiohttp.ClientTimeout(total=45, connect=15)
-            connector = aiohttp.TCPConnector(
-                limit=100, 
-                limit_per_host=10,
-                enable_cleanup_closed=True,
-                keepalive_timeout=60,
-                ttl_dns_cache=300,
-                use_dns_cache=True
-            )
-            
-            jar = aiohttp.CookieJar(unsafe=True, quote_cookie=False)
-            
-            self.session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-                cookie_jar=jar,
-                trust_env=True,
-                headers={'Connection': 'keep-alive'}
-            )
+    elif message.photo:
+        photo_file = await message.photo[-1].get_file()
+        photo_path = "input.jpg"
+        await photo_file.download_to_drive(photo_path)
+        cleaned_path = clean_image(photo_path)
+        title, price = extract_title_and_price(cleaned_path)
+        caption = f"{title} @{price}rs"
+        await message.reply_photo(photo=open(cleaned_path, 'rb'), caption=caption)
 
-    async def close_session(self):
-        """Close aiohttp session"""
-        if self.session:
-            await self.session.close()
+def capture_mobile_screenshot(url):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--window-size=720,1529")
+    options.add_argument("user-agent=Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/117.0.0.0 Mobile Safari/537.36")
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+    driver.get(url)
+    screenshot_path = "screenshot.png"
+    driver.save_screenshot(screenshot_path)
+    driver.quit()
+    return screenshot_path
 
-    def get_random_headers(self, platform: str = None, attempt: int = 0) -> Dict:
-        """Get randomized headers for requests with attempt-based variations"""
-        user_agent = random.choice(self.user_agents)
-        
-        base_headers = {
-            'User-Agent': user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'cross-site'
-        }
-        
-        if 'Chrome' in user_agent:
-            base_headers.update({
-                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+def clean_image(path):
+    img = cv2.imread(path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+    mask = cv2.bitwise_not(thresh)
+    cleaned = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
+    cleaned_path = "cleaned.jpg"
+    cv2.imwrite(cleaned_path, cleaned)
+    return cleaned_path
+
+def extract_title_and_price(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    text = pytesseract.image_to_string(gray)
+
+    title = ""
+    prices = []
+
+    for line in text.split('\n'):
+        if any(currency in line for currency in ["₹", "Rs", "$", "€", "£"]):
+            found = re.findall(r'\d+', line)
+            prices.extend([int(p) for p in found])
+        elif len(line.strip()) > 10 and not title:
+            title = line.strip()
+
+    final_price = min(prices) if prices else 0
+    return title or "Product", final_price
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
+    app.run_polling()                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
                 'Sec-Ch-Ua-Mobile': '?0',
                 'Sec-Ch-Ua-Platform': '"Windows"'
             })
